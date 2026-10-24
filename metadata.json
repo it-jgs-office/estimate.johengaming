@@ -1,0 +1,6 @@
+{
+  "name": "Johen Gaming Price Estimator",
+  "description": "Smart Game Account Valuation System for Johen Gaming internal team to estimate account selling prices based on skin specifications, rarity, and diamond costs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
