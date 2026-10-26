@@ -9,7 +9,6 @@ import {
   Database,
   History,
   Calendar,
-  Sparkles,
   Plus,
   FileSpreadsheet,
   ArrowRight,
@@ -18,9 +17,10 @@ import {
   Clock,
   Layers,
 } from 'lucide-react';
-import { Estimation, Game, User } from '../types';
+import { Estimation, User } from '../types';
 import { repository } from '../services/repository';
 import { formatGameCurrency, formatIDR, formatNumberID } from '../services/pricingCalculationService';
+import { getGameIconPath } from '../services/gameIcon';
 import { NavView } from '../components/Sidebar';
 
 interface DashboardViewProps {
@@ -93,7 +93,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             onClick={() => onNavigate('estimator')}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-colors"
           >
-            <Sparkles className="w-4 h-4" />
+            <Plus className="w-4 h-4" />
             Estimasi Baru
           </button>
         </div>
@@ -253,7 +253,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 onClick={() => onNavigate('estimator')}
                 className="p-3 rounded-xl border border-blue-200/80 dark:border-blue-900/60 bg-blue-50/50 dark:bg-blue-950/30 hover:bg-blue-100/60 text-blue-700 dark:text-blue-300 font-semibold flex flex-col items-center text-center gap-1.5 transition-colors"
               >
-                <Sparkles className="w-5 h-5 text-blue-600" />
+                <Plus className="w-5 h-5 text-blue-600" />
                 <span>New Estimation</span>
               </button>
 
@@ -331,6 +331,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             const gameCats = categories.filter((c) => c.gameId === g.id && c.status === 'active');
             const gameItems = items.filter((i) => i.gameId === g.id);
             const pricing = repository.getPricingSettingByGame(g.id);
+            const gameIconPath = getGameIconPath(g);
 
             return (
               <div
@@ -339,8 +340,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               >
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-lg bg-blue-100 dark:bg-blue-900/60 text-blue-600 dark:text-blue-300 flex items-center justify-center font-bold text-xs">
-                      {g.name.substring(0, 2).toUpperCase()}
+                    <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg bg-blue-100 text-xs font-bold text-blue-600 dark:bg-blue-900/60 dark:text-blue-300">
+                      {gameIconPath ? (
+                        <img
+                          src={gameIconPath}
+                          alt={`Ikon ${g.name}`}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        g.name.substring(0, 2).toUpperCase()
+                      )}
                     </div>
                     <div>
                       <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100">{g.name}</h4>

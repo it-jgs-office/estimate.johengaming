@@ -73,7 +73,7 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    showToast('Template Diunduh', 'Berkas matriks kategori dan rarity siap dibuka di Excel.', 'success');
+    showToast('Template Diunduh', 'Berkas matriks kategori dan item siap dibuka di Excel.', 'success');
   };
 
   // Handle File Input
@@ -109,7 +109,7 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
 
   const processMatrix = (matrix: unknown[][]) => {
     if (matrix.length < 2 || matrix[0].length < 2) {
-      showToast('Berkas Kosong', 'Berkas harus memiliki kolom Kategori dan minimal satu rarity.', 'error');
+      showToast('Berkas Kosong', 'Berkas harus memiliki kolom Kategori dan minimal satu item.', 'error');
       return;
     }
     const games = repository.getGames();
@@ -135,13 +135,13 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
     });
 
     if (rows.length === 0) {
-      showToast('Data tidak ditemukan', 'Isi nilai currency pada minimal satu kolom rarity.', 'warning');
+      showToast('Data tidak ditemukan', 'Isi nilai currency pada minimal satu kolom item.', 'warning');
       return;
     }
 
     setParsedRows(rows);
     setStep(2);
-    showToast('Berkas Berhasil Dibaca', `${rows.length} harga kategori–rarity berhasil dimuat untuk pratinjau.`, 'info');
+    showToast('Berkas Berhasil Dibaca', `${rows.length} harga kategori–item berhasil dimuat untuk pratinjau.`, 'info');
   };
 
   // Execute Import
@@ -270,10 +270,10 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
                 <br />
                 Kolom pertama: <span className="font-semibold text-slate-800 dark:text-slate-200">Kategori</span>
                 <br />
-                Kolom berikutnya: nama <span className="font-semibold text-slate-800 dark:text-slate-200">Rarity</span>
+                Kolom berikutnya: nama <span className="font-semibold text-slate-800 dark:text-slate-200">Item</span>
               </div>
               <div>
-                Setiap nilai pada perpotongan kategori dan rarity menjadi harga currency.
+                Setiap nilai pada perpotongan kategori dan item menjadi harga currency.
               </div>
             </div>
           </div>

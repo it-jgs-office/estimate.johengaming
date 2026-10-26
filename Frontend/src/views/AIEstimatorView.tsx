@@ -315,7 +315,7 @@ export const AIEstimatorView: React.FC<AIEstimatorViewProps> = ({
       tempId: `manual-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       gameId: selectedGame.id,
       categoryName: prompt.categoryGuess || 'Custom Category',
-      rarityName: prompt.rarityGuess || 'Custom Rarity',
+      rarityName: prompt.rarityGuess || 'Item kustom',
       itemName: manualName,
       itemType: 'manual',
       quantity: qty,
@@ -592,7 +592,7 @@ Tanggal: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'full' })}`;
                                   {item.itemName}
                                 </span>
                                 <span className="text-[10px] text-slate-500">
-                                  Kategori: {item.categoryName} · Rarity: {item.rarityName} · {item.quantity}x @ {formatNumberID(item.unitCurrency)}
+                                  Kategori: {item.categoryName} · Item: {item.rarityName} · {item.quantity}x @ {formatNumberID(item.unitCurrency)}
                                 </span>
                               </div>
                               <span className="font-mono font-bold text-slate-800 dark:text-slate-200">

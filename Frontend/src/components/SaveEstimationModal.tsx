@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { X, Check, Bookmark, Sparkles } from 'lucide-react';
+import { X, Check, Bookmark } from 'lucide-react';
 import { Estimation, EstimationCalculation, Game, RecognizedItem, User } from '../types';
 import { formatGameCurrency, formatIDR } from '../services/pricingCalculationService';
 import { repository } from '../services/repository';

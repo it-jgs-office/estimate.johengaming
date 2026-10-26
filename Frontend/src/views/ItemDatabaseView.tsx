@@ -13,18 +13,20 @@ import {
   Edit2,
   FileSpreadsheet,
   Layers,
+  Gamepad2,
+  ArrowLeft,
   ChevronLeft,
   ChevronRight,
   CheckSquare,
   Square,
-  Sparkles,
   X,
   AlertCircle,
   ShieldAlert,
 } from 'lucide-react';
-import { Category, Game, GameItem, Rarity, User } from '../types';
+import { Category, GameItem, Rarity, User } from '../types';
 import { repository } from '../services/repository';
 import { formatGameCurrency, formatNumberID } from '../services/pricingCalculationService';
+import { getGameIconPath } from '../services/gameIcon';
 import { useToast } from '../context/ToastContext';
 import { ConfirmationModal } from '../components/ConfirmationModal';
 
@@ -41,8 +43,8 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
   const isSuperAdmin = currentUser.role === 'SUPER_ADMIN';
 
   const games = repository.getGames();
-  const [selectedGameId, setSelectedGameId] = useState<string>(games[0]?.id || 'GAME-FF');
-  const activeGame = repository.getGameById(selectedGameId) || games[0];
+  const [selectedGameId, setSelectedGameId] = useState<string>('');
+  const activeGame = selectedGameId ? repository.getGameById(selectedGameId) : undefined;
 
   const categories = repository.getCategoriesByGame(selectedGameId);
   const rarities = repository.getRaritiesByGame(selectedGameId);
@@ -74,8 +76,122 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
   const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
   const [isDeleteGameOpen, setIsDeleteGameOpen] = useState(false);
 
+  if (!selectedGameId) {
+    return (
+      <div className="app-page flex-1 overflow-y-auto p-4 md:p-8 max-w-7xl mx-auto w-full">
+        <div className="flex flex-col gap-4 border-b border-slate-200 pb-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-600" />
+              Database katalog
+            </div>
+            <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-slate-900 md:text-2xl">
+              <Database className="h-6 w-6 text-blue-600" />
+              Item Database Management
+            </h1>
+            <p className="mt-1 text-xs text-slate-500">
+              Pilih game untuk melihat dan mengelola kategori serta item-nya.
+            </p>
+          </div>
+
+          <button
+            onClick={onNavigateToImport}
+            className="flex w-fit items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition-colors hover:bg-slate-50"
+          >
+            <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+            Import Excel
+          </button>
+        </div>
+
+        {games.length === 0 ? (
+          <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center shadow-2xs">
+            <Database className="mx-auto h-8 w-8 text-slate-300" />
+            <h2 className="mt-3 text-sm font-bold text-slate-800">Belum ada database game</h2>
+            <p className="mx-auto mt-1 max-w-sm text-xs leading-5 text-slate-500">
+              Impor berkas Excel untuk membuat katalog game, kategori, item, dan harga awal.
+            </p>
+            <button
+              onClick={onNavigateToImport}
+              className="mt-5 inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-blue-700"
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              Import Excel
+            </button>
+          </div>
+        ) : (
+          <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {games.map((game) => {
+              const categoryCount = repository.getCategoriesByGame(game.id).length;
+              const rarityCount = repository.getRaritiesByGame(game.id).length;
+              const gameIconPath = getGameIconPath(game);
+
+              return (
+                <button
+                  key={game.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedGameId(game.id);
+                    setCategoryFilter('ALL');
+                    setRarityFilter('ALL');
+                    setSearchQuery('');
+                    setSelectedItemIds([]);
+                    setCurrentPage(1);
+                  }}
+                  className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-2xs transition-all duration-200 hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-lg focus:outline-none focus:ring-4 focus:ring-blue-500/10"
+                >
+                  <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-blue-600 via-indigo-500 to-sky-400 opacity-0 transition-opacity group-hover:opacity-100" />
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-xl bg-blue-50 text-blue-600 transition-colors group-hover:bg-blue-100">
+                        {gameIconPath ? (
+                          <img
+                            src={gameIconPath}
+                            alt={`Ikon ${game.name}`}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <Gamepad2 className="h-5 w-5" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <h2 className="truncate text-sm font-bold text-slate-900">{game.name}</h2>
+                        <p className="mt-0.5 text-[11px] text-slate-500">
+                          {game.currencyName} ({game.currencySymbol})
+                        </p>
+                      </div>
+                    </div>
+                    <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${
+                      game.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      {game.status === 'active' ? 'Aktif' : 'Nonaktif'}
+                    </span>
+                  </div>
+
+                  <div className="mt-5 grid grid-cols-2 divide-x divide-slate-100 border-y border-slate-100 py-3">
+                    <div className="pr-3">
+                      <span className="block text-lg font-bold tabular-nums text-slate-900">{categoryCount}</span>
+                      <span className="text-[11px] text-slate-500">Kategori</span>
+                    </div>
+                    <div className="pl-3">
+                      <span className="block text-lg font-bold tabular-nums text-slate-900">{rarityCount}</span>
+                      <span className="text-[11px] text-slate-500">Item</span>
+                    </div>
+                  </div>
+
+                  <span className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600">
+                    Buka database <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   if (!activeGame) {
-    return <div className="flex-1 grid place-items-center p-8 text-sm text-slate-500">Impor katalog Excel terlebih dahulu.</div>;
+    return <div className="flex-1 grid place-items-center p-8 text-sm text-slate-500">Game tidak ditemukan.</div>;
   }
 
   // All items for this game
@@ -156,7 +272,7 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
       return;
     }
     if (!formRarityId) {
-      setFormError('Rarity harus dipilih');
+      setFormError('Item harus dipilih');
       return;
     }
 
@@ -241,14 +357,32 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
     <div className="app-page flex-1 overflow-y-auto p-4 md:p-8 space-y-6 max-w-7xl mx-auto">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl md:text-2xl font-bold text-slate-900 dark:text-slate-100 tracking-tight flex items-center gap-2">
-            <Database className="w-6 h-6 text-blue-600" />
-            Item Database Management
-          </h1>
-          <p className="text-xs text-slate-500 mt-1">
-            Kelola harga tiap item yang bersumber dari data Excel.
-          </p>
+        <div className="flex items-start gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedGameId('');
+              setCategoryFilter('ALL');
+              setRarityFilter('ALL');
+              setSearchQuery('');
+              setSelectedItemIds([]);
+              setCurrentPage(1);
+            }}
+            className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
+            title="Kembali ke daftar game"
+            aria-label="Kembali ke daftar game"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <div>
+            <h1 className="text-xl md:text-2xl font-bold text-slate-900 dark:text-slate-100 tracking-tight flex items-center gap-2">
+              <Database className="w-6 h-6 text-blue-600" />
+              {activeGame.name}
+            </h1>
+            <p className="text-xs text-slate-500 mt-1">
+              Kelola kategori, item, dan harga yang bersumber dari data Excel.
+            </p>
+          </div>
         </div>
 
         <div className="flex items-center gap-2.5 self-start sm:self-auto">
@@ -312,12 +446,12 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
 
           {/* Search */}
           <div className="sm:col-span-1 lg:col-span-2">
-            <label className="block text-slate-500 font-medium mb-1">Cari Kategori / Rarity:</label>
+            <label className="block text-slate-500 font-medium mb-1">Cari Kategori / Item:</label>
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5" />
               <input
                 type="text"
-                placeholder="Cari kategori atau rarity..."
+                placeholder="Cari kategori atau item..."
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
@@ -389,7 +523,7 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
                   </th>
                 )}
                 <th className="py-3 px-3">Kategori</th>
-                <th className="py-3 px-3">Rarity</th>
+                <th className="py-3 px-3">Item</th>
                 <th className="py-3 px-3 text-right">Estimasi {activeGame.currencyName}</th>
                 <th className="py-3 px-3 text-right">Aksi</th>
               </tr>
@@ -518,7 +652,7 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
             )}
 
             <form onSubmit={handleSubmitForm} className="flex-1 overflow-y-auto space-y-3.5 text-xs pr-1">
-              {/* Category & Rarity */}
+              {/* Category & Item */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1">
@@ -539,7 +673,7 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
 
                 <div>
                   <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1">
-                    Rarity *
+                    Item *
                   </label>
                   <select
                     value={formRarityId}
@@ -620,7 +754,7 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
         <ConfirmationModal
           isOpen={isDeleteGameOpen}
           title={`Hapus Game ${activeGame.name}?`}
-          message={`Seluruh data ${activeGame.name} akan dihapus permanen, termasuk ${rawItems.length} item, kategori, rarity, pengaturan harga, riwayat estimasi, dan sesi chat. Tindakan ini tidak dapat dibatalkan.`}
+          message={`Seluruh data ${activeGame.name} akan dihapus permanen, termasuk ${rawItems.length} data kategori dan item, pengaturan harga, riwayat estimasi, dan sesi chat. Tindakan ini tidak dapat dibatalkan.`}
           confirmLabel="Hapus Keseluruhan Game"
           variant="danger"
           onConfirm={() => void handleConfirmDeleteGame()}

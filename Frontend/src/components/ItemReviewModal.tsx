@@ -182,7 +182,7 @@ export const ItemReviewModal: React.FC<ItemReviewModalProps> = ({
                 <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 font-medium border-b border-slate-200 dark:border-slate-800">
                   <tr>
                     <th className="py-2.5 px-3">Item / Skin</th>
-                    <th className="py-2.5 px-3">Kategori & Rarity</th>
+                    <th className="py-2.5 px-3">Kategori & Item</th>
                     <th className="py-2.5 px-3 text-center">Jumlah (Qty)</th>
                     <th className="py-2.5 px-3 text-right">Biaya Satuan</th>
                     <th className="py-2.5 px-3 text-right">Subtotal</th>
@@ -319,12 +319,12 @@ export const ItemReviewModal: React.FC<ItemReviewModalProps> = ({
 
                 <div>
                   <label className="block text-slate-600 dark:text-slate-400 font-medium mb-1">
-                    Rarity
+                    Item
                   </label>
                   <input
                     type="text"
                     list="rar-suggestions"
-                    placeholder="Rarity"
+                    placeholder="Item"
                     value={manualRarity}
                     onChange={(e) => setManualRarity(e.target.value)}
                     className="w-full px-2.5 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
