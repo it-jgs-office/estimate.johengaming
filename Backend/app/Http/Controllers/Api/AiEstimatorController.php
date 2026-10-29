@@ -18,10 +18,6 @@ class AiEstimatorController extends Controller
             'history.*.role' => ['required_with:history', 'in:user,assistant'],
             'history.*.content' => ['required_with:history', 'string', 'max:4000'],
         ]);
-        if (! config('services.groq.key')) {
-            return response()->json(['message' => 'GROQ_API_KEY belum dikonfigurasi pada server.'], 503);
-        }
-
         try {
             return response()->json($estimator->estimate(
                 Game::query()->findOrFail($data['gameId']),

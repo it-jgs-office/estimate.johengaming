@@ -23,7 +23,7 @@ import {
   AlertCircle,
   ShieldAlert,
 } from 'lucide-react';
-import { Category, GameItem, Rarity, User } from '../types';
+import { Category, Game, GameItem, Rarity, User } from '../types';
 import { repository } from '../services/repository';
 import { formatGameCurrency, formatNumberID } from '../services/pricingCalculationService';
 import { getGameIconPath } from '../services/gameIcon';
@@ -74,7 +74,37 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
   // Delete Modals
   const [deleteTarget, setDeleteTarget] = useState<GameItem | null>(null);
   const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
-  const [isDeleteGameOpen, setIsDeleteGameOpen] = useState(false);
+  const [deleteGameTarget, setDeleteGameTarget] = useState<Game | null>(null);
+
+  const handleConfirmDeleteGame = async () => {
+    const gameToDelete = deleteGameTarget;
+    if (!gameToDelete) return;
+    const nextGame = games.find((game) => game.id !== gameToDelete.id);
+
+    try {
+      const deleted = await repository.deleteGame(gameToDelete.id);
+      if (!deleted) throw new Error('Game tidak ditemukan');
+
+      setDeleteGameTarget(null);
+      if (selectedGameId === gameToDelete.id) setSelectedGameId(nextGame?.id || '');
+      setCategoryFilter('ALL');
+      setRarityFilter('ALL');
+      setSearchQuery('');
+      setSelectedItemIds([]);
+      setCurrentPage(1);
+      showToast(
+        'Game Dihapus',
+        `${gameToDelete.name} beserta seluruh data terkait berhasil dihapus.`,
+        'info'
+      );
+    } catch (error) {
+      showToast(
+        'Gagal Menghapus Game',
+        error instanceof Error ? error.message : 'Game tidak dapat dihapus dari server.',
+        'error'
+      );
+    }
+  };
 
   if (!selectedGameId) {
     return (
@@ -126,9 +156,10 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
               const gameIconPath = getGameIconPath(game);
 
               return (
-                <button
+                <div
                   key={game.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => {
                     setSelectedGameId(game.id);
                     setCategoryFilter('ALL');
@@ -136,6 +167,18 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
                     setSearchQuery('');
                     setSelectedItemIds([]);
                     setCurrentPage(1);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setSelectedGameId(game.id);
+                      setCategoryFilter('ALL');
+                      setRarityFilter('ALL');
+                      setSearchQuery('');
+                      setSelectedItemIds([]);
+                      setCurrentPage(1);
+                    }
                   }}
                   className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-2xs transition-all duration-200 hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-lg focus:outline-none focus:ring-4 focus:ring-blue-500/10"
                 >
@@ -160,11 +203,27 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
                         </p>
                       </div>
                     </div>
-                    <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${
-                      game.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                    }`}>
-                      {game.status === 'active' ? 'Aktif' : 'Nonaktif'}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${
+                        game.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        {game.status === 'active' ? 'Aktif' : 'Nonaktif'}
+                      </span>
+                      {isSuperAdmin && (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setDeleteGameTarget(game);
+                          }}
+                          className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-600 transition-colors hover:bg-rose-100"
+                          title={`Hapus game ${game.name}`}
+                          aria-label={`Hapus game ${game.name}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div className="mt-5 grid grid-cols-2 divide-x divide-slate-100 border-y border-slate-100 py-3">
@@ -181,10 +240,21 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
                   <span className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600">
                     Buka database <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
                   </span>
-                </button>
+                </div>
               );
             })}
           </div>
+        )}
+        {deleteGameTarget && (
+          <ConfirmationModal
+            isOpen={Boolean(deleteGameTarget)}
+            title={`Hapus Game ${deleteGameTarget.name}?`}
+            message={`Seluruh data ${deleteGameTarget.name} akan dihapus permanen, termasuk ${repository.getItemsByGame(deleteGameTarget.id).length} data kategori dan item, pengaturan harga, riwayat estimasi, dan sesi chat. Tindakan ini tidak dapat dibatalkan.`}
+            confirmLabel="Hapus Keseluruhan Game"
+            variant="danger"
+            onConfirm={() => void handleConfirmDeleteGame()}
+            onCancel={() => setDeleteGameTarget(null)}
+          />
         )}
       </div>
     );
@@ -324,35 +394,6 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
     showToast('Hapus Massal Berhasil', `${deletedCount} item telah dihapus dari master database.`, 'info');
   };
 
-  const handleConfirmDeleteGame = async () => {
-    const gameToDelete = activeGame;
-    const nextGame = games.find((game) => game.id !== gameToDelete.id);
-
-    try {
-      const deleted = await repository.deleteGame(gameToDelete.id);
-      if (!deleted) throw new Error('Game tidak ditemukan');
-
-      setIsDeleteGameOpen(false);
-      setSelectedGameId(nextGame?.id || '');
-      setCategoryFilter('ALL');
-      setRarityFilter('ALL');
-      setSearchQuery('');
-      setSelectedItemIds([]);
-      setCurrentPage(1);
-      showToast(
-        'Game Dihapus',
-        `${gameToDelete.name} beserta seluruh data terkait berhasil dihapus.`,
-        'info'
-      );
-    } catch (error) {
-      showToast(
-        'Gagal Menghapus Game',
-        error instanceof Error ? error.message : 'Game tidak dapat dihapus dari server.',
-        'error'
-      );
-    }
-  };
-
   return (
     <div className="app-page flex-1 overflow-y-auto p-4 md:p-8 space-y-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -430,17 +471,6 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
                   </option>
                 ))}
               </select>
-              {isSuperAdmin && (
-                <button
-                  type="button"
-                  onClick={() => setIsDeleteGameOpen(true)}
-                  className="p-2 text-rose-600 border border-rose-200 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors shrink-0"
-                  title={`Hapus keseluruhan game ${activeGame.name}`}
-                  aria-label={`Hapus keseluruhan game ${activeGame.name}`}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )}
             </div>
           </div>
 
@@ -750,17 +780,6 @@ export const ItemDatabaseView: React.FC<ItemDatabaseViewProps> = ({
         />
       )}
 
-      {isDeleteGameOpen && (
-        <ConfirmationModal
-          isOpen={isDeleteGameOpen}
-          title={`Hapus Game ${activeGame.name}?`}
-          message={`Seluruh data ${activeGame.name} akan dihapus permanen, termasuk ${rawItems.length} data kategori dan item, pengaturan harga, riwayat estimasi, dan sesi chat. Tindakan ini tidak dapat dibatalkan.`}
-          confirmLabel="Hapus Keseluruhan Game"
-          variant="danger"
-          onConfirm={() => void handleConfirmDeleteGame()}
-          onCancel={() => setIsDeleteGameOpen(false)}
-        />
-      )}
     </div>
   );
 };

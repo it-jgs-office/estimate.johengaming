@@ -12,6 +12,7 @@ Route::middleware('api.token')->group(function () {
     Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::get('/bootstrap', [CatalogController::class, 'bootstrap']);
     Route::post('/catalog/import', [CatalogController::class, 'import']);
+    Route::post('/catalog/spreadsheet-sources', [CatalogController::class, 'connectSpreadsheet']);
     Route::delete('/catalog/games/{game}', [CatalogController::class, 'destroyGame']);
     Route::post('/catalog/items', [CatalogController::class, 'saveItem']);
     Route::delete('/catalog/items/{item}', [CatalogController::class, 'destroyItem']);

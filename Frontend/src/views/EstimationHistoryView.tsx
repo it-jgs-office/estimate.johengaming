@@ -55,6 +55,7 @@ export const EstimationHistoryView: React.FC<EstimationHistoryViewProps> = ({
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGameFilter, setSelectedGameFilter] = useState('ALL');
+  const [selectedDateFilter, setSelectedDateFilter] = useState('');
 
   // Detail Modal
   const [activeDetail, setActiveDetail] = useState<Estimation | null>(selectedDetailEst || null);
@@ -62,6 +63,7 @@ export const EstimationHistoryView: React.FC<EstimationHistoryViewProps> = ({
 
   // Delete modal
   const [deleteTarget, setDeleteTarget] = useState<Estimation | null>(null);
+  const [bulkDeleteMode, setBulkDeleteMode] = useState<'date' | 'all' | null>(null);
 
   // Sync when prop changes
   React.useEffect(() => {
@@ -77,9 +79,18 @@ export const EstimationHistoryView: React.FC<EstimationHistoryViewProps> = ({
     setEstimations(repository.getEstimations());
   };
 
+  const getDateKey = (value: string) => {
+    const date = new Date(value);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   // Filtered estimations
   const filteredList = estimations.filter((e) => {
     if (selectedGameFilter !== 'ALL' && e.gameId !== selectedGameFilter) return false;
+    if (selectedDateFilter && getDateKey(e.createdAt) !== selectedDateFilter) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchId = e.id.toLowerCase().includes(q);
@@ -103,6 +114,30 @@ export const EstimationHistoryView: React.FC<EstimationHistoryViewProps> = ({
     showToast('Estimasi Dihapus', `Data estimasi ${deleteTarget.id} telah dihapus.`, 'info');
   };
 
+  const dateList = selectedDateFilter
+    ? estimations.filter((estimation) => getDateKey(estimation.createdAt) === selectedDateFilter)
+    : [];
+
+  const handleBulkDelete = () => {
+    const targets = bulkDeleteMode === 'date' ? dateList : estimations;
+    if (targets.length === 0) {
+      setBulkDeleteMode(null);
+      return;
+    }
+
+    const targetIds = new Set(targets.map((target) => target.id));
+    targets.forEach((target) => repository.deleteEstimation(target.id));
+    if (activeDetail && targetIds.has(activeDetail.id)) setActiveDetail(null);
+    setDeleteTarget(null);
+    setBulkDeleteMode(null);
+    refreshList();
+    showToast(
+      bulkDeleteMode === 'date' ? 'Riwayat tanggal dihapus' : 'Seluruh riwayat dihapus',
+      `${targets.length} estimasi telah dihapus.`,
+      'info',
+    );
+  };
+
   // Handle Recalculate with CURRENT database rates
   const handleRecalculateCurrentDB = (est: Estimation) => {
     const game = repository.getGameById(est.gameId);
@@ -123,7 +158,13 @@ export const EstimationHistoryView: React.FC<EstimationHistoryViewProps> = ({
 
   const getExportName = () => {
     const game = selectedGameFilter === 'ALL' ? null : repository.getGameById(selectedGameFilter);
-    return (game?.name || 'semua-game').toLowerCase().replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '');
+    const gameName = (game?.name || 'semua-game').toLowerCase().replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '');
+    return `${gameName}${selectedDateFilter ? `-${selectedDateFilter}` : ''}`;
+  };
+
+  const getFilterLabel = () => {
+    const gameLabel = selectedGameFilter === 'ALL' ? 'Semua Game' : repository.getGameById(selectedGameFilter)?.name || 'Game';
+    return `${gameLabel}${selectedDateFilter ? ` · ${new Date(`${selectedDateFilter}T00:00:00`).toLocaleDateString('id-ID')}` : ''}`;
   };
 
   const getExportRows = () => filteredList.map((estimation) => {
@@ -151,10 +192,10 @@ export const EstimationHistoryView: React.FC<EstimationHistoryViewProps> = ({
 
   const handleExportExcel = () => {
     if (!ensureExportable()) return;
-    const gameLabel = selectedGameFilter === 'ALL' ? 'Semua Game' : repository.getGameById(selectedGameFilter)?.name || 'Game';
+    const gameLabel = getFilterLabel();
     const worksheet = XLSX.utils.aoa_to_sheet([
       ['JOHEN GAMING - ESTIMATION HISTORY'],
-      [`Kategori game: ${gameLabel}`],
+      [`Filter: ${gameLabel}`],
       [`Diekspor: ${new Date().toLocaleString('id-ID')}`],
       [],
       exportHeaders,
@@ -173,14 +214,14 @@ export const EstimationHistoryView: React.FC<EstimationHistoryViewProps> = ({
 
   const handleExportPdf = () => {
     if (!ensureExportable()) return;
-    const gameLabel = selectedGameFilter === 'ALL' ? 'Semua Game' : repository.getGameById(selectedGameFilter)?.name || 'Game';
+    const gameLabel = getFilterLabel();
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     document.setFontSize(16);
     document.setTextColor(15, 23, 42);
     document.text('JOHEN GAMING - RIWAYAT ESTIMASI', 40, 42);
     document.setFontSize(9);
     document.setTextColor(71, 85, 105);
-    document.text(`Kategori game: ${gameLabel} | Diekspor: ${new Date().toLocaleString('id-ID')}`, 40, 60);
+    document.text(`Filter: ${gameLabel} | Diekspor: ${new Date().toLocaleString('id-ID')}`, 40, 60);
     autoTable(document, {
       startY: 76,
       head: [exportHeaders],
@@ -236,7 +277,7 @@ Tanggal: ${new Date(est.createdAt).toLocaleDateString('id-ID', { dateStyle: 'ful
             Estimation History
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            Semua hasil estimasi tersimpan di sini dan dapat diekspor berdasarkan game.
+            Semua hasil estimasi tersimpan di sini dan dapat diekspor berdasarkan game maupun tanggal.
           </p>
         </div>
 
@@ -286,6 +327,50 @@ Tanggal: ${new Date(est.createdAt).toLocaleDateString('id-ID', { dateStyle: 'ful
               </option>
             ))}
           </select>
+        </div>
+
+        <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5">
+          <Calendar className="h-3.5 w-3.5 text-slate-500" />
+          <input
+            type="date"
+            value={selectedDateFilter}
+            onChange={(e) => setSelectedDateFilter(e.target.value)}
+            aria-label="Filter tanggal estimasi"
+            className="min-w-32 bg-transparent text-slate-900 text-xs font-semibold focus:outline-none"
+          />
+          {selectedDateFilter && (
+            <button
+              type="button"
+              onClick={() => setSelectedDateFilter('')}
+              className="rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+              title="Hapus filter tanggal"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          {selectedDateFilter && (
+            <button
+              type="button"
+              onClick={() => setBulkDeleteMode('date')}
+              disabled={dateList.length === 0}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-2.5 py-2 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Hapus tanggal
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setBulkDeleteMode('all')}
+            disabled={estimations.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-2.5 py-2 text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Hapus semua
+          </button>
         </div>
 
         <div className="text-slate-500 md:ml-auto px-2">
@@ -613,6 +698,20 @@ Tanggal: ${new Date(est.createdAt).toLocaleDateString('id-ID', { dateStyle: 'ful
           variant="danger"
           onConfirm={handleDelete}
           onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {bulkDeleteMode && (
+        <ConfirmationModal
+          isOpen={Boolean(bulkDeleteMode)}
+          title={bulkDeleteMode === 'date' ? 'Hapus Riwayat Tanggal Ini?' : 'Hapus Semua Riwayat?'}
+          message={bulkDeleteMode === 'date'
+            ? `Sebanyak ${dateList.length} estimasi pada ${new Date(`${selectedDateFilter}T00:00:00`).toLocaleDateString('id-ID')} akan dihapus permanen.`
+            : `Seluruh ${estimations.length} riwayat estimasi akan dihapus permanen.`}
+          confirmLabel={bulkDeleteMode === 'date' ? 'Hapus Tanggal Ini' : 'Hapus Semua'}
+          variant="danger"
+          onConfirm={handleBulkDelete}
+          onCancel={() => setBulkDeleteMode(null)}
         />
       )}
     </div>

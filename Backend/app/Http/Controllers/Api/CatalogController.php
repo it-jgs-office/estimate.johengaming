@@ -10,6 +10,8 @@ use App\Models\Game;
 use App\Models\GameItem;
 use App\Models\PricingSetting;
 use App\Models\Rarity;
+use App\Models\SpreadsheetSource;
+use App\Services\GoogleSpreadsheetCatalogSyncService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -34,10 +36,11 @@ class CatalogController extends Controller
     public function storeSession(Request $request)
     {
         $data = $request->validate([
-            'id' => ['nullable', 'uuid'], 'gameId' => ['required', 'uuid', 'exists:games,id'], 'title' => ['required', 'string', 'max:255'],
+            'id' => ['nullable', 'string', 'max:100'], 'gameId' => ['required', 'uuid', 'exists:games,id'], 'title' => ['required', 'string', 'max:255'],
             'messages' => ['required', 'array'], 'currentItems' => ['required', 'array'],
         ]);
-        $session = EstimationSession::query()->firstOrNew(['id' => $data['id'] ?? null]);
+        $sessionId = isset($data['id']) && Str::isUuid($data['id']) ? $data['id'] : null;
+        $session = $sessionId ? EstimationSession::query()->firstOrNew(['id' => $sessionId]) : new EstimationSession();
         if ($session->exists && $session->user_id !== $request->user()->id) abort(403);
         $session->fill([
             'user_id' => $request->user()->id, 'game_id' => $data['gameId'], 'title' => $data['title'],
@@ -58,16 +61,19 @@ class CatalogController extends Controller
     {
         $data = $request->validate([
             'mode' => ['required', 'in:skip_duplicates,update_existing,import_new_only'],
+            'currencyName' => ['required', 'string', 'max:100'],
             'rows' => ['required', 'array', 'min:1'],
             'rows.*.game' => ['required', 'string', 'max:100'],
             'rows.*.category' => ['required', 'string', 'max:100'],
             'rows.*.rarity' => ['required', 'string', 'max:100'],
+            'rows.*.itemName' => ['nullable', 'string', 'max:255'],
             'rows.*.estimatedCurrency' => ['required', 'integer', 'min:1'],
         ]);
 
         $created = 0;
         $updated = 0;
         $skipped = 0;
+        $currencyName = trim($data['currencyName']);
         foreach ($data['rows'] as $row) {
             $gameName = trim($row['game']);
             $game = Game::query()->whereRaw('lower(name) = ?', [strtolower($gameName)])->first();
@@ -76,23 +82,42 @@ class CatalogController extends Controller
                 $slug = $baseSlug;
                 $counter = 2;
                 while (Game::query()->where('slug', $slug)->exists()) $slug = $baseSlug.'-'.$counter++;
-                $game = Game::query()->create(['name' => $gameName, 'slug' => $slug, 'currency_name' => 'Currency', 'currency_symbol' => 'C', 'default_conversion_rate' => 0, 'low_percentage' => 0, 'medium_percentage' => 0, 'high_percentage' => 0]);
+                $game = Game::query()->create(['name' => $gameName, 'slug' => $slug, 'currency_name' => $currencyName, 'currency_symbol' => $currencyName, 'default_conversion_rate' => 0, 'low_percentage' => 0, 'medium_percentage' => 0, 'high_percentage' => 0]);
                 PricingSetting::query()->create(['game_id' => $game->id, 'currency_rate' => 0, 'low_percentage' => 0, 'medium_percentage' => 0, 'high_percentage' => 0]);
+            } elseif ($game->currency_name !== $currencyName || $game->currency_symbol !== $currencyName) {
+                $game->update(['currency_name' => $currencyName, 'currency_symbol' => $currencyName]);
             }
             $category = Category::query()->firstOrCreate(['game_id' => $game->id, 'name' => trim($row['category'])], ['aliases' => []]);
             $rarity = Rarity::query()->firstOrCreate(['game_id' => $game->id, 'name' => trim($row['rarity'])], ['aliases' => []]);
             $item = GameItem::query()->where(['game_id' => $game->id, 'category_id' => $category->id, 'rarity_id' => $rarity->id])->first();
             if ($item && $data['mode'] !== 'update_existing') { $skipped++; continue; }
             if ($item) {
-                $item->update(['name' => $category->name, 'estimated_currency' => $row['estimatedCurrency'], 'status' => 'active']);
+                $item->update(['name' => trim($row['itemName'] ?? $category->name), 'estimated_currency' => $row['estimatedCurrency'], 'status' => 'active']);
                 $updated++;
             } else {
-                GameItem::query()->create(['game_id' => $game->id, 'category_id' => $category->id, 'rarity_id' => $rarity->id, 'name' => $category->name, 'estimated_currency' => $row['estimatedCurrency']]);
+                GameItem::query()->create(['game_id' => $game->id, 'category_id' => $category->id, 'rarity_id' => $rarity->id, 'name' => trim($row['itemName'] ?? $category->name), 'estimated_currency' => $row['estimatedCurrency']]);
                 $created++;
             }
         }
 
         return response()->json(['created' => $created, 'updated' => $updated, 'skipped' => $skipped]);
+    }
+
+    public function connectSpreadsheet(Request $request, GoogleSpreadsheetCatalogSyncService $syncService)
+    {
+        $data = $request->validate([
+            'spreadsheetUrl' => ['required', 'url', 'max:2048'],
+            'gameName' => ['required', 'string', 'max:100'],
+            'currencyName' => ['required', 'string', 'max:100'],
+        ]);
+
+        $source = SpreadsheetSource::query()->updateOrCreate(
+            ['source_url' => trim($data['spreadsheetUrl'])],
+            ['game_name' => trim($data['gameName']), 'currency_name' => trim($data['currencyName']), 'status' => 'active']
+        );
+        $result = $syncService->sync($source);
+
+        return response()->json([...$result, 'sourceId' => $source->id, 'lastSyncedAt' => $source->fresh()->last_synced_at?->toISOString()]);
     }
 
     public function saveItem(Request $request)

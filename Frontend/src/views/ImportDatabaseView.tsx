@@ -17,6 +17,8 @@ import {
   ArrowRight,
   RotateCcw,
   Layers,
+  Link2,
+  LoaderCircle,
 } from 'lucide-react';
 import { ImportBatch, User } from '../types';
 import { repository } from '../services/repository';
@@ -33,6 +35,7 @@ interface ParsedImportRow {
   game: string;
   category: string;
   rarity: string;
+  itemName?: string;
   estimatedCurrency: number;
   isValid: boolean;
   errors: string[];
@@ -51,8 +54,14 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [fileName, setFileName] = useState('');
+  const [importSource, setImportSource] = useState<'file' | 'spreadsheet'>('file');
+  const [isImporting, setIsImporting] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('');
   const [gameName, setGameName] = useState('');
+  const [currencyName, setCurrencyName] = useState('');
+  const [spreadsheetUrl, setSpreadsheetUrl] = useState('');
   const [parsedRows, setParsedRows] = useState<ParsedImportRow[]>([]);
+  const [previewMatrix, setPreviewMatrix] = useState<unknown[][]>([]);
   const [conflictMode, setConflictMode] = useState<
     'skip_duplicates' | 'update_existing' | 'import_new_only'
   >('update_existing');
@@ -89,9 +98,34 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
     if (file) void readSpreadsheet(file);
   };
 
+  const handleConnectSpreadsheet = async () => {
+    if (isImporting) return;
+    if (!gameName.trim() || !currencyName.trim() || !spreadsheetUrl.trim()) {
+      showToast('Data belum lengkap', 'Masukkan nama game, mata uang, dan link Google Spreadsheet publik.', 'warning');
+      return;
+    }
+
+    try {
+      setIsImporting(true);
+      setLoadingMessage('Menyinkronkan spreadsheet ke database...');
+      const result = await api<{ created: number; updated: number }>('/catalog/spreadsheet-sources', {
+        method: 'POST',
+        body: JSON.stringify({ gameName: gameName.trim(), currencyName: currencyName.trim(), spreadsheetUrl: spreadsheetUrl.trim() }),
+      });
+      await repository.hydrate();
+      showToast('Spreadsheet Tersambung', `${result.created + result.updated} item disinkronkan. Perubahan akan diperiksa tiap menit.`, 'success');
+      setStep(3);
+    } catch (error) {
+      showToast('Spreadsheet Gagal Tersambung', error instanceof Error ? error.message : 'Link spreadsheet tidak dapat dibaca.', 'error');
+    } finally {
+      setIsImporting(false);
+      setLoadingMessage('');
+    }
+  };
+
   const readSpreadsheet = async (file: File) => {
-    if (!gameName.trim()) {
-      showToast('Nama game diperlukan', 'Masukkan nama game sebelum mengunggah data harga.', 'warning');
+    if (!gameName.trim() || !currencyName.trim()) {
+      showToast('Data game belum lengkap', 'Masukkan nama game dan mata uang sebelum mengunggah data harga.', 'warning');
       return;
     }
     setFileName(file.name);
@@ -101,6 +135,7 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
       const workbook = XLSX.read(source, { type: isExcel ? 'array' : 'string' });
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
       const matrix = XLSX.utils.sheet_to_json<unknown[]>(firstSheet, { header: 1, defval: '' });
+      setPreviewMatrix(matrix);
       processMatrix(matrix);
     } catch {
       showToast('Berkas tidak dapat dibaca', 'Gunakan file Excel (.xlsx/.xls) atau CSV dengan format matriks.', 'error');
@@ -116,21 +151,42 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
     const categories = repository.getCategories();
     const rarities = repository.getRarities();
     const existingItems = repository.getItems();
-    const rarityHeaders = matrix[0].slice(1).map((header) => String(header).trim());
+    const columnHeaders = matrix[0].slice(1).map((header) => String(header).trim());
     const rows: ParsedImportRow[] = [];
 
     matrix.slice(1).forEach((line, rowIndex) => {
       const categoryRaw = String(line[0] ?? '').trim();
-      rarityHeaders.forEach((rarityRaw, rarityIndex) => {
+      columnHeaders.forEach((headerRaw, rarityIndex) => {
         const rawValue = line[rarityIndex + 1];
-        if (!categoryRaw || !rarityRaw || rawValue === '' || rawValue === null || rawValue === undefined) return;
-        const currencyRaw = Number(String(rawValue).replace(/[^\d]/g, ''));
-        const errors = isNaN(currencyRaw) || currencyRaw <= 0 ? ['Nilai currency harus angka > 0'] : [];
-        const matchedGame = games.find((game) => game.name.toLowerCase() === gameName.trim().toLowerCase());
-        const matchedCategory = matchedGame ? categories.find((category) => category.gameId === matchedGame.id && category.name.toLowerCase() === categoryRaw.toLowerCase()) : undefined;
-        const matchedRarity = matchedGame ? rarities.find((rarity) => rarity.gameId === matchedGame.id && rarity.name.toLowerCase() === rarityRaw.toLowerCase()) : undefined;
-        const isDuplicate = Boolean(matchedGame && matchedCategory && matchedRarity && existingItems.some((item) => item.gameId === matchedGame.id && item.categoryId === matchedCategory.id && item.rarityId === matchedRarity.id));
-        rows.push({ rowNumber: rowIndex + 2, game: gameName.trim(), category: categoryRaw, rarity: rarityRaw, estimatedCurrency: currencyRaw, isValid: errors.length === 0, errors, isDuplicate, gameIdResolved: matchedGame?.id, categoryIdResolved: matchedCategory?.id, rarityIdResolved: matchedRarity?.id });
+        if (!categoryRaw || !headerRaw || rawValue === '' || rawValue === null || rawValue === undefined) return;
+
+        const headerCurrency = /^\s*\d[\d.,\s]*(?:VP)?\s*$/i.test(headerRaw)
+          ? Number(headerRaw.replace(/[^\d]/g, ''))
+          : 0;
+        const isVpColumn = headerCurrency > 0;
+        const skinEntries = isVpColumn
+          ? String(rawValue)
+              .split(/\r?\n/)
+              .map((entry) => entry.trim())
+              .filter(Boolean)
+              .map((entry) => {
+                const explicitPrice = entry.match(/^(.*?)\s*=\s*(\d+)\s*$/);
+                return {
+                  name: (explicitPrice?.[1] ?? entry).trim(),
+                  currency: Number(explicitPrice?.[2] ?? headerCurrency),
+                };
+              })
+          : [{ name: headerRaw, currency: Number(String(rawValue).replace(/[^\d]/g, '')) }];
+
+        skinEntries.forEach(({ name, currency }) => {
+          if (!name) return;
+          const errors = isNaN(currency) || currency <= 0 ? ['Nilai currency harus angka > 0'] : [];
+          const matchedGame = games.find((game) => game.name.toLowerCase() === gameName.trim().toLowerCase());
+          const matchedCategory = matchedGame ? categories.find((category) => category.gameId === matchedGame.id && category.name.toLowerCase() === categoryRaw.toLowerCase()) : undefined;
+          const matchedRarity = matchedGame ? rarities.find((rarity) => rarity.gameId === matchedGame.id && rarity.name.toLowerCase() === name.toLowerCase()) : undefined;
+          const isDuplicate = Boolean(matchedGame && matchedCategory && matchedRarity && existingItems.some((item) => item.gameId === matchedGame.id && item.categoryId === matchedCategory.id && item.rarityId === matchedRarity.id));
+          rows.push({ rowNumber: rowIndex + 2, game: gameName.trim(), category: categoryRaw, rarity: name, itemName: isVpColumn ? `${categoryRaw} ${name}` : undefined, estimatedCurrency: currency, isValid: errors.length === 0, errors, isDuplicate, gameIdResolved: matchedGame?.id, categoryIdResolved: matchedCategory?.id, rarityIdResolved: matchedRarity?.id });
+        });
       });
     });
 
@@ -146,16 +202,20 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
 
   // Execute Import
   const handleConfirmImport = async () => {
+    if (isImporting) return;
     const validRows = parsedRows.filter((row) => row.isValid);
     const failedCount = parsedRows.length - validRows.length;
     if (validRows.length === 0) return;
 
     try {
+      setIsImporting(true);
+      setLoadingMessage('Menyimpan item ke database...');
       const result = await api<{ created: number; updated: number; skipped: number }>('/catalog/import', {
         method: 'POST',
         body: JSON.stringify({
           mode: conflictMode,
-          rows: validRows.map(({ game, category, rarity, estimatedCurrency }) => ({ game, category, rarity, estimatedCurrency })),
+          currencyName: currencyName.trim(),
+          rows: validRows.map(({ game, category, rarity, itemName, estimatedCurrency }) => ({ game, category, rarity, itemName, estimatedCurrency })),
         }),
       });
       await repository.hydrate();
@@ -180,24 +240,39 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
       showToast('Impor Selesai!', `${successfulCount} item berhasil diimpor ke database master.`, 'success');
     } catch (error) {
       showToast('Impor Gagal', error instanceof Error ? error.message : 'Data tidak dapat disimpan ke server.', 'error');
+    } finally {
+      setIsImporting(false);
+      setLoadingMessage('');
     }
   };
 
   const validRowsCount = parsedRows.filter((r) => r.isValid).length;
   const invalidRowsCount = parsedRows.filter((r) => !r.isValid).length;
   const duplicateRowsCount = parsedRows.filter((r) => r.isDuplicate).length;
-  const previewRarities = Array.from(new Set(parsedRows.map((row) => row.rarity)));
-  const previewCategories = Array.from(new Set(parsedRows.map((row) => row.category)));
-  const previewCells = new Map(parsedRows.map((row) => [`${row.category}::${row.rarity}`, row]));
+  const canUpload = Boolean(gameName.trim() && currencyName.trim());
+  const previewHeaders = previewMatrix[0] ?? [];
+  const previewRows = previewMatrix.slice(1);
 
   return (
     <div className="app-page flex-1 overflow-y-auto p-4 md:p-8 space-y-6 max-w-7xl mx-auto">
+      {isImporting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/25 p-4 backdrop-blur-[1px]" role="status" aria-live="polite">
+          <div className="w-full max-w-sm rounded-2xl border border-blue-100 bg-white p-6 text-center shadow-xl">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+              <LoaderCircle className="h-6 w-6 animate-spin" />
+            </div>
+            <p className="text-sm font-bold text-slate-900">Memproses impor</p>
+            <p className="mt-1 text-xs text-slate-500">{loadingMessage}</p>
+            <p className="mt-4 text-[11px] text-slate-400">Jangan tutup halaman sampai proses selesai.</p>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
         <div>
           <h1 className="text-xl md:text-2xl font-bold text-slate-900 dark:text-slate-100 tracking-tight flex items-center gap-2">
             <FileSpreadsheet className="w-6 h-6 text-emerald-600" />
-            Database Import (CSV / Excel)
+            Database Import
           </h1>
           <p className="text-xs text-slate-500 mt-1">
             Unggah dan perbarui katalog item ribuan skin game secara massal melalui berkas spreadsheet.
@@ -216,27 +291,85 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
       {/* STEP 1: Upload Interface */}
       {step === 1 && (
         <div className="space-y-6">
-          <div className="max-w-md">
-            <label className="block text-xs font-semibold text-slate-700 mb-1.5">Nama game</label>
-            <input
-              type="text"
-              value={gameName}
-              onChange={(event) => setGameName(event.target.value)}
-              placeholder="Nama game untuk data harga ini"
-              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/15"
-            />
+          <div className="grid max-w-2xl grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">Nama game</label>
+              <input
+                type="text"
+                value={gameName}
+                onChange={(event) => setGameName(event.target.value)}
+                placeholder="Nama game untuk data harga ini"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/15"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">Mata uang game</label>
+              <input
+                type="text"
+                value={currencyName}
+                onChange={(event) => setCurrencyName(event.target.value)}
+                placeholder="Contoh: VP, Diamond, CV"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/15"
+              />
+            </div>
           </div>
+          <div className="max-w-2xl">
+            <span className="mb-1.5 block text-xs font-semibold text-slate-700">Sumber impor</span>
+            <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1.5">
+              <button
+                type="button"
+                onClick={() => setImportSource('file')}
+                className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-xs font-semibold transition-colors ${importSource === 'file' ? 'bg-white text-blue-700 shadow-2xs' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                <FileSpreadsheet className="h-4 w-4" />
+                File Excel / CSV
+              </button>
+              <button
+                type="button"
+                onClick={() => setImportSource('spreadsheet')}
+                className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-xs font-semibold transition-colors ${importSource === 'spreadsheet' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                <Link2 className="h-4 w-4" />
+                Link Spreadsheet
+              </button>
+            </div>
+          </div>
+          {importSource === 'spreadsheet' && (
+          <div className="max-w-2xl rounded-xl border border-slate-200 bg-white p-4 text-xs shadow-2xs">
+            <label className="mb-1.5 block font-semibold text-slate-700">Link Google Spreadsheet publik</label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                type="url"
+                value={spreadsheetUrl}
+                onChange={(event) => setSpreadsheetUrl(event.target.value)}
+                placeholder="https://docs.google.com/spreadsheets/d/..."
+                className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/15"
+              />
+              <button
+                type="button"
+                onClick={() => void handleConnectSpreadsheet()}
+                disabled={isImporting || !canUpload || !spreadsheetUrl.trim()}
+                className="rounded-lg bg-emerald-600 px-4 py-2.5 font-semibold text-white transition-colors hover:bg-emerald-700 disabled:bg-slate-300 disabled:text-slate-500"
+              >
+                Hubungkan Spreadsheet
+              </button>
+            </div>
+            <p className="mt-2 text-[11px] text-slate-500">Bagikan sebagai “Siapa saja yang memiliki link dapat melihat”. Katalog disinkronkan ulang setiap menit.</p>
+          </div>
+          )}
+          {importSource === 'file' && (
           <div
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className="p-10 border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-blue-500 dark:hover:border-blue-400 bg-white dark:bg-slate-900 rounded-2xl text-center cursor-pointer transition-all flex flex-col items-center justify-center space-y-3 group"
+            onClick={() => canUpload && fileInputRef.current?.click()}
+            className={`p-10 border-2 border-dashed rounded-2xl text-center transition-all flex flex-col items-center justify-center space-y-3 group ${canUpload ? 'border-slate-300 dark:border-slate-700 hover:border-blue-500 dark:hover:border-blue-400 bg-white dark:bg-slate-900 cursor-pointer' : 'border-slate-200 bg-slate-50 cursor-not-allowed opacity-70 dark:border-slate-800 dark:bg-slate-900/60'}`}
           >
             <input
               type="file"
               ref={fileInputRef}
               onChange={handleFileUpload}
               accept=".csv,.xlsx,.xls"
+              disabled={!canUpload}
               className="hidden"
             />
             <div className="w-14 h-14 rounded-2xl bg-blue-50 dark:bg-blue-950/50 flex items-center justify-center text-blue-600 dark:text-blue-400 group-hover:scale-105 transition-transform">
@@ -252,11 +385,13 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
             </div>
             <button
               type="button"
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-xs"
+              disabled={!canUpload}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-500 text-white rounded-lg text-xs font-semibold shadow-xs"
             >
               Pilih Berkas
             </button>
           </div>
+          )}
 
           {/* Guidelines Card */}
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
@@ -367,31 +502,34 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
               <span className="font-bold text-slate-800 dark:text-slate-200">
                 Pratinjau Berkas: <span className="font-mono text-blue-600">{fileName}</span>
               </span>
-              <span className="text-slate-500">{parsedRows.length} baris diproses</span>
+              <span className="text-slate-500">{parsedRows.length} item diproses</span>
             </div>
 
-            <div className="overflow-x-auto max-h-96">
-              <table className="w-full min-w-[560px] text-left text-xs">
+            <div className="overflow-auto max-h-96">
+              <table className="w-full min-w-[920px] text-left text-xs">
                 <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 font-medium sticky top-0 border-b border-slate-200 dark:border-slate-800">
                   <tr>
-                    <th className="sticky left-0 z-10 min-w-44 bg-slate-50 py-3 px-4 font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">Kategori</th>
-                    {previewRarities.map((rarity) => (
-                      <th key={rarity} className="min-w-32 py-3 px-4 text-right font-bold text-slate-700 dark:text-slate-200">{rarity}</th>
+                    {previewHeaders.map((header, index) => (
+                      <th
+                        key={`header-${index}`}
+                        className={`min-w-32 py-3 px-4 font-bold text-slate-700 dark:text-slate-200 ${index === 0 ? 'sticky left-0 z-10 min-w-44 bg-slate-50 dark:bg-slate-800' : 'text-center'}`}
+                      >
+                        {String(header ?? '')}
+                      </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {previewCategories.map((category) => (
-                    <tr key={category} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
-                      <th className="sticky left-0 z-[1] bg-white py-3 px-4 font-semibold text-slate-800 dark:bg-slate-900 dark:text-slate-200">{category}</th>
-                      {previewRarities.map((rarity) => {
-                        const cell = previewCells.get(`${category}::${rarity}`);
-                        return (
-                          <td key={rarity} className={`py-3 px-4 text-right font-mono font-semibold ${!cell ? 'text-slate-300' : cell.isValid ? 'text-slate-900 dark:text-slate-100' : 'bg-rose-50 text-rose-600 dark:bg-rose-950/20'}`}>
-                            {cell ? new Intl.NumberFormat('id-ID').format(cell.estimatedCurrency) : '—'}
-                          </td>
-                        );
-                      })}
+                  {previewRows.map((row, rowIndex) => (
+                    <tr key={`row-${rowIndex}`} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
+                      {previewHeaders.map((_, columnIndex) => (
+                        <td
+                          key={`cell-${rowIndex}-${columnIndex}`}
+                          className={`whitespace-pre-line px-4 py-3 align-top text-slate-700 dark:text-slate-300 ${columnIndex === 0 ? 'sticky left-0 z-[1] bg-white font-semibold dark:bg-slate-900 dark:text-slate-200' : ''}`}
+                        >
+                          {String(row[columnIndex] ?? '')}
+                        </td>
+                      ))}
                     </tr>
                   ))}
                 </tbody>
@@ -411,7 +549,7 @@ export const ImportDatabaseView: React.FC<ImportDatabaseViewProps> = ({
               <button
                 type="button"
                 onClick={handleConfirmImport}
-                disabled={validRowsCount === 0}
+                disabled={isImporting || validRowsCount === 0}
                 className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-lg font-bold shadow-xs transition-colors flex items-center gap-2"
               >
                 <span>Impor {validRowsCount} Item ke Master Database</span>

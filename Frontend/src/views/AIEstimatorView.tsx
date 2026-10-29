@@ -41,7 +41,6 @@ import { repository } from '../services/repository';
 import { api } from '../services/api';
 import { useToast } from '../context/ToastContext';
 import { ItemReviewModal } from '../components/ItemReviewModal';
-import { SaveEstimationModal } from '../components/SaveEstimationModal';
 import { ConfirmationModal } from '../components/ConfirmationModal';
 
 interface AIEstimatorViewProps {
@@ -82,10 +81,10 @@ export const AIEstimatorView: React.FC<AIEstimatorViewProps> = ({
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Modals & Panels
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
-  const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false);
   const [copiedResult, setCopiedResult] = useState(false);
   const [gameSwitchConfirm, setGameSwitchConfirm] = useState<{ open: boolean; nextGameId: string }>({
@@ -97,6 +96,7 @@ export const AIEstimatorView: React.FC<AIEstimatorViewProps> = ({
   const [unknownFormValues, setUnknownFormValues] = useState<
     Record<string, { currency: string; name?: string }>
   >({});
+  const [savingUnknownKey, setSavingUnknownKey] = useState('');
 
   // Recalculate valuation on items/game/settings change
   const calculation: EstimationCalculation = calculateAccountValuation(
@@ -113,6 +113,14 @@ export const AIEstimatorView: React.FC<AIEstimatorViewProps> = ({
   useEffect(() => {
     scrollToBottom();
   }, [messages, isTyping]);
+
+  useEffect(() => {
+    const textarea = composerTextareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 280)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > 280 ? 'auto' : 'hidden';
+  }, [inputText]);
 
   // Handle preloaded items (from duplicate history or external quick load)
   useEffect(() => {
@@ -298,8 +306,9 @@ export const AIEstimatorView: React.FC<AIEstimatorViewProps> = ({
   };
 
   // Manual unknown item confirmation
-  const handleConfirmUnknownItem = (prompt: UnknownItemPrompt, index: number) => {
+  const handleConfirmUnknownItem = async (prompt: UnknownItemPrompt, index: number) => {
     const key = `${prompt.rawText}_${index}`;
+    if (savingUnknownKey === key) return;
     const entered = unknownFormValues[key];
     const currencyVal = parseInt(entered?.currency?.replace(/\D/g, '') || '0', 10);
 
@@ -310,47 +319,100 @@ export const AIEstimatorView: React.FC<AIEstimatorViewProps> = ({
 
     const manualName = entered?.name?.trim() || prompt.rawText;
     const qty = prompt.quantity || 1;
+    const [rawCategory, ...rawRarityParts] = prompt.rawText.split(':');
+    const categoryName = (prompt.categoryGuess || (rawRarityParts.length > 0 ? rawCategory : '') || 'Umum').trim().slice(0, 100);
+    const rarityName = (prompt.rarityGuess || rawRarityParts.join(':').trim() || manualName).trim().slice(0, 100);
 
-    const manualItem: RecognizedItem = {
-      tempId: `manual-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      gameId: selectedGame.id,
-      categoryName: prompt.categoryGuess || 'Custom Category',
-      rarityName: prompt.rarityGuess || 'Item kustom',
-      itemName: manualName,
-      itemType: 'manual',
-      quantity: qty,
-      unitCurrency: currencyVal,
-      totalCurrency: currencyVal * qty,
-      matchSource: 'manual',
-      confidence: 'manual',
-      isManual: true,
-      originalRawText: prompt.rawText,
-    };
+    try {
+      setSavingUnknownKey(key);
+      await api('/catalog/import', {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: 'update_existing',
+          currencyName: selectedGame.currencyName,
+          rows: [{
+            game: selectedGame.name,
+            category: categoryName,
+            rarity: rarityName,
+            itemName: manualName.slice(0, 255),
+            estimatedCurrency: currencyVal,
+          }],
+        }),
+      });
+      await repository.hydrate();
 
-    const newDraft = [...draftItems, manualItem];
-    setDraftItems(newDraft);
+      const category = repository.getCategoriesByGame(selectedGame.id)
+        .find((entry) => entry.name.toLowerCase() === categoryName.toLowerCase());
+      const rarity = repository.getRaritiesByGame(selectedGame.id)
+        .find((entry) => entry.name.toLowerCase() === rarityName.toLowerCase());
+      const savedItem = repository.getItems().find((entry) => (
+        entry.gameId === selectedGame.id
+        && entry.categoryId === category?.id
+        && entry.rarityId === rarity?.id
+      ));
 
-    // Clean form state
-    setUnknownFormValues((prev) => {
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
+      const manualItem: RecognizedItem = {
+        tempId: `database-${savedItem?.id || Date.now()}`,
+        gameId: selectedGame.id,
+        categoryId: category?.id,
+        categoryName: category?.name || categoryName,
+        rarityId: rarity?.id,
+        rarityName: rarity?.name || rarityName,
+        itemId: savedItem?.id,
+        itemName: savedItem?.name || manualName,
+        itemType: savedItem?.type || 'specific',
+        quantity: qty,
+        unitCurrency: currencyVal,
+        totalCurrency: currencyVal * qty,
+        matchSource: 'database',
+        confidence: 'high',
+        originalRawText: prompt.rawText,
+      };
 
-    const newCalc = calculateAccountValuation(newDraft, selectedGame, pricingSetting);
+      const newDraft = [...draftItems, manualItem];
+      setDraftItems(newDraft);
 
-    // Add confirmation assistant message
-    const confirmMsg: ChatMessage = {
-      id: `msg-manual-${Date.now()}`,
-      sender: 'assistant',
-      content: `Item "${manualName}" berhasil ditambahkan secara manual (${formatGameCurrency(currencyVal, selectedGame.currencySymbol)}). Total estimasi diperbarui.`,
-      timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-      parsedItems: newDraft,
-      calculation: newCalc,
-    };
+      setUnknownFormValues((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
 
-    setMessages((prev) => [...prev, confirmMsg]);
-    showToast('Item manual ditambahkan', `${manualName} telah dimasukkan ke dalam draft kalkulasi`, 'success');
+      const newCalc = calculateAccountValuation(newDraft, selectedGame, pricingSetting);
+
+      const confirmMsg: ChatMessage = {
+        id: `msg-manual-${Date.now()}`,
+        sender: 'assistant',
+        content: `Item "${manualName}" disimpan ke database (${formatGameCurrency(currencyVal, selectedGame.currencySymbol)}). Total estimasi diperbarui.`,
+        timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+        parsedItems: newDraft,
+        calculation: newCalc,
+      };
+
+      const resolveUnknown = (items: ChatMessage[]) => items.map((message) => {
+        if (!message.hasUnknownItems || !message.unknownItemsList) return message;
+        const remaining = message.unknownItemsList.filter((item) => item.rawText !== prompt.rawText);
+        return { ...message, hasUnknownItems: remaining.length > 0, unknownItemsList: remaining };
+      });
+      setMessages((prev) => [...resolveUnknown(prev), confirmMsg]);
+
+      if (activeSessionId) {
+        const session = repository.getSessionById(activeSessionId);
+        if (session) {
+          session.currentItems = newDraft;
+          session.messages = [...resolveUnknown(session.messages), confirmMsg];
+          session.updatedAt = new Date().toISOString();
+          repository.saveSession(session);
+          setSessions(repository.getSessions());
+        }
+      }
+
+      showToast('Nilai disimpan ke database', `${manualName} akan dikenali otomatis pada estimasi berikutnya.`, 'success');
+    } catch (error) {
+      showToast('Gagal menyimpan nilai', error instanceof Error ? error.message : 'Nilai belum masuk ke database.', 'error');
+    } finally {
+      setSavingUnknownKey('');
+    }
   };
 
   // Copy full result to clipboard
@@ -361,31 +423,73 @@ export const AIEstimatorView: React.FC<AIEstimatorViewProps> = ({
     }
 
     const itemsSummary = draftItems
-      .map((i) => `• ${i.itemName} (${i.quantity}x) = ${formatGameCurrency(i.totalCurrency, selectedGame.currencySymbol)}`)
+      .map((item) => `- ${item.itemName} (${item.quantity}x) - ${formatGameCurrency(item.totalCurrency, selectedGame.currencySymbol)}`)
       .join('\n');
 
-    const textToCopy = `JOHEN GAMING — ACCOUNT PRICE ESTIMATION
-========================================
-Game: ${selectedGame.name}
-Total Currency: ${formatGameCurrency(calculation.totalCurrency, selectedGame.currencySymbol)}
-Conversion Rate: Rp${calculation.conversionRate} / ${selectedGame.currencySymbol}
-Base Account Value: ${formatIDR(calculation.baseValue)}
+    const textToCopy = `✦ ESTIMASI AKUN ${selectedGame.name.toUpperCase()}
+────────────────────────
+◈ Total ${selectedGame.currencyName}: ${formatGameCurrency(calculation.totalCurrency, selectedGame.currencySymbol)}
 
-ESTIMASI HARGA JUAL:
-• Low Price (${calculation.lowPercentage}%): ${formatIDR(calculation.lowPrice)}
-• Medium Price (${calculation.mediumPercentage}%): ${formatIDR(calculation.mediumPrice)} [Recommended]
-• High Price (${calculation.highPercentage}%): ${formatIDR(calculation.highPrice)}
+Harga jual:
+• Low: ${formatIDR(calculation.lowPrice)}
+★ Rekomendasi: ${formatIDR(calculation.mediumPrice)}
+• High: ${formatIDR(calculation.highPrice)}
 
-Koleksi Item:
-${itemsSummary}
-
-Diestimasi oleh: ${currentUser.name} (${currentUser.role})
-Tanggal: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'full' })}`;
+Item:
+${itemsSummary}`;
 
     navigator.clipboard.writeText(textToCopy);
     setCopiedResult(true);
     showToast('Hasil disalin!', 'Ringkasan estimasi akun siap dibagikan', 'success');
     setTimeout(() => setCopiedResult(false), 2500);
+  };
+
+  const handleSaveEstimation = () => {
+    if (draftItems.length === 0) {
+      showToast('Tidak ada data', 'Tambahkan item sebelum menyimpan estimasi.', 'warning');
+      return;
+    }
+
+    const itemSignature = (items: RecognizedItem[]) => items
+      .map((item) => [item.categoryName, item.rarityName, item.itemName, item.quantity, item.unitCurrency].join('::'))
+      .sort()
+      .join('|');
+    const currentSignature = itemSignature(draftItems);
+    const alreadySaved = repository.getEstimations().some((estimation) => (
+      estimation.gameId === selectedGame.id
+      && estimation.totalCurrency === calculation.totalCurrency
+      && itemSignature(estimation.itemsSnapshot) === currentSignature
+    ));
+    if (alreadySaved) {
+      showToast('Sudah ada di History', 'Estimasi dengan item dan nilai yang sama sudah tersimpan.', 'info');
+      return;
+    }
+
+    const topItems = draftItems.slice(0, 2).map((item) => item.itemName).join(' + ');
+    const moreItems = draftItems.length > 2 ? ` (+${draftItems.length - 2} item)` : '';
+    const savedEstimation: Estimation = {
+      id: repository.getNextEstimationId(),
+      gameId: selectedGame.id,
+      userId: currentUser.id,
+      userName: currentUser.name,
+      title: `${selectedGame.name} Account - ${topItems}${moreItems}`,
+      originalSpecification: draftItems.map((item) => `${item.itemName} (${item.quantity}x)`).join(', '),
+      totalCurrency: calculation.totalCurrency,
+      conversionRateSnapshot: calculation.conversionRate,
+      lowPercentageSnapshot: calculation.lowPercentage,
+      mediumPercentageSnapshot: calculation.mediumPercentage,
+      highPercentageSnapshot: calculation.highPercentage,
+      baseValue: calculation.baseValue,
+      lowPrice: calculation.lowPrice,
+      mediumPrice: calculation.mediumPrice,
+      highPrice: calculation.highPrice,
+      itemsSnapshot: JSON.parse(JSON.stringify(draftItems)),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    repository.saveEstimation(savedEstimation);
+    showToast('Estimasi Tersimpan', `Nomor ${savedEstimation.id} masuk ke Estimation History.`, 'success');
   };
 
   return (
@@ -508,9 +612,9 @@ Tanggal: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'full' })}`;
               </span>
             )}
             <button
-              onClick={() => handleSendMessage('reset')}
+              onClick={() => handleNewSession()}
               className="text-xs text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 p-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              title="Kosongkan draft kalkulasi"
+              title="Reset chat"
             >
               <RotateCcw className="w-4 h-4" />
             </button>
@@ -648,11 +752,11 @@ Tanggal: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'full' })}`;
                           </button>
                           <button
                             type="button"
-                            onClick={() => setIsSaveModalOpen(true)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-[11px] font-semibold transition-colors"
+                            onClick={handleSaveEstimation}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm transition-all hover:-translate-y-px hover:from-emerald-600 hover:to-teal-700 hover:shadow-md"
                           >
-                            <Bookmark className="w-3 h-3" />
-                            Simpan estimasi
+                            <Bookmark className="w-3.5 h-3.5" />
+                            Simpan ke History
                           </button>
                         </div>
                       </div>
@@ -701,9 +805,10 @@ Tanggal: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'full' })}`;
                                   <button
                                     type="button"
                                     onClick={() => handleConfirmUnknownItem(unk, idx)}
-                                    className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-md text-xs font-semibold whitespace-nowrap transition-colors"
+                                    disabled={savingUnknownKey === key}
+                                    className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white rounded-md text-xs font-semibold whitespace-nowrap transition-colors"
                                   >
-                                    Konfirmasi
+                                    {savingUnknownKey === key ? 'Menyimpan...' : 'Konfirmasi'}
                                   </button>
                                 </div>
                               </div>
@@ -750,6 +855,7 @@ Tanggal: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'full' })}`;
           >
             <div className="flex-1 relative">
               <textarea
+                ref={composerTextareaRef}
                 rows={1}
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
@@ -759,8 +865,8 @@ Tanggal: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'full' })}`;
                     void handleSendMessage();
                   }
                 }}
-                placeholder={`Tulis spesifikasi akun ${selectedGame.name}...`}
-                className="w-full max-h-32 min-h-[42px] px-3.5 py-2.5 text-xs rounded-xl border border-blue-200 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-200 resize-none leading-relaxed"
+                placeholder={`Tulis spesifikasi akun ${selectedGame.name}... (Shift+Enter untuk baris baru)`}
+                className="w-full min-h-[42px] max-h-[280px] overflow-y-auto px-3.5 py-2.5 text-xs rounded-xl border border-blue-200 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-200 resize-none leading-relaxed transition-[height] duration-150"
               />
             </div>
             <button
@@ -787,21 +893,6 @@ Tanggal: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'full' })}`;
           onUpdateItems={(updated) => {
             setDraftItems(updated);
             showToast('Draft diperbarui', `${updated.length} item aktif dalam kalkulasi`, 'success');
-          }}
-        />
-      )}
-
-      {/* Save Estimation Modal */}
-      {isSaveModalOpen && (
-        <SaveEstimationModal
-          isOpen={isSaveModalOpen}
-          game={selectedGame}
-          items={draftItems}
-          calculation={calculation}
-          currentUser={currentUser}
-          onClose={() => setIsSaveModalOpen(false)}
-          onSaved={(saved) => {
-            showToast('Estimasi Tersimpan', `Nomor ${saved.id} berhasil dicatat ke dalam database riwayat`, 'success');
           }}
         />
       )}
